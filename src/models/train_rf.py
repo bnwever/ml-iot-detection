@@ -4,7 +4,6 @@ import pandas as pd
 import joblib
 from sklearn.model_selection import train_test_split, GridSearchCV, KFold
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import classification_report, accuracy_score
 from sklearn.compose import ColumnTransformer
 from sklearn.pipeline import Pipeline
 from sklearn.impute import SimpleImputer
@@ -23,9 +22,6 @@ def train_rf_models(data_dir: str, models_dir: str):
         return
     
     trained_models = {}
-    
-    total_correct = 0
-    total_samples = 0
     
     # Define a grid of hyperparameters to search over
     param_grid = {
@@ -76,7 +72,7 @@ def train_rf_models(data_dir: str, models_dir: str):
         ])
         
         # 2. Keep it random (Standard train/test split, ignoring UID completely)
-        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+        X_train, _, y_train, _ = train_test_split(X, y, test_size=0.2, random_state=42)
         
         # 4. Grid Search Optimization
         print(f"Running Grid Search for {log_type} on {len(X_train)} training samples...")
@@ -88,31 +84,19 @@ def train_rf_models(data_dir: str, models_dir: str):
         
         best_model = grid_search.best_estimator_
         
-        y_pred = best_model.predict(X_test)
-        
-        correct_predictions = sum(y_test == y_pred)
-        total_correct += correct_predictions
-        total_samples += len(y_test)
-        
         print(f"Best Hyperparameters: {grid_search.best_params_}\n")
         
-        # 3. Saving the model (explained in chat)
+        # 3. Saving the model
         model_save_path = os.path.join(models_dir, f'rf_{log_type}_model.joblib')
         joblib.dump(best_model, model_save_path)
         
         trained_models[log_type] = best_model
-        
-    if total_samples > 0:
-        overall_accuracy = total_correct / total_samples
-        print(f"==================================================")
-        print(f"OVERALL COMBINED TEST ACCURACY: {overall_accuracy:.4f} ({total_correct}/{total_samples} correct)")
-        print(f"==================================================\n")
         
     print(f"All optimized models saved to: {models_dir}")
     return trained_models
 
 if __name__ == "__main__":
     matrices_dir = os.path.join(os.path.dirname(__file__), '..', '..', 'data', 'processed', 'feature_matrices')
-    save_dir = os.path.join(os.path.dirname(__file__), '..', '..', 'models', 'random_forest')
+    save_dir = os.path.join(os.path.dirname(__file__), '..', '..', 'models', 'trained', 'random_forest')
     
     train_rf_models(matrices_dir, save_dir)
