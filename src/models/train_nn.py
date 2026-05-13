@@ -7,9 +7,7 @@ from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder, StandardScaler
 import os
 import joblib
-
-# Import the network architecture
-from network import SimpleNN
+from network import NeuralNetwork
 
 def main():
     x_path = os.path.join('data', 'processed', 'X_matrix.parquet')
@@ -25,14 +23,8 @@ def main():
 
     print(f"Original X shape: {X_df.shape}, Y shape: {Y_df.shape}")
 
-    # Handle missing values and scale X
+    # Handle missing values
     X_df = X_df.fillna(0)
-    scaler = StandardScaler()
-    X = scaler.fit_transform(X_df.values)
-    
-    # Save the scaler for use in the testing script
-    joblib.dump(scaler, os.path.join(models_dir, 'scaler.pkl'))
-    print("Saved StandardScaler to models/scaler.pkl")
 
     # Encode Y: Transform the 4 categorical columns into integers
     Y = np.zeros(Y_df.shape)
@@ -42,13 +34,19 @@ def main():
         Y[:, i] = le.fit_transform(Y_df[col].astype(str))
         encoders[col] = le
         
-    # Save the LabelEncoders
     joblib.dump(encoders, os.path.join(models_dir, 'encoders.pkl'))
     print("Saved LabelEncoders to models/encoders.pkl")
 
     # Split the dataset 70/30
     print("Splitting data into 70% training and 30% testing...")
-    X_train, X_test, y_train, y_test = train_test_split(X, Y, test_size=0.3, random_state=42)
+    X_train_raw, X_test_raw, y_train, y_test = train_test_split(X_df.values, Y, test_size=0.3, random_state=42)
+
+    scaler = StandardScaler()
+    X_train = scaler.fit_transform(X_train_raw)
+    
+    # Save the scaler for use in the testing script
+    joblib.dump(scaler, os.path.join(models_dir, 'scaler.pkl'))
+    print("Saved StandardScaler to models/scaler.pkl")
 
     # Convert training features to PyTorch tensors
     X_train_tensor = torch.tensor(X_train, dtype=torch.float32)
@@ -58,18 +56,17 @@ def main():
     input_size = X_train.shape[1] 
     hidden_size = 24
     
-    print(f"\nTraining 4 separate models (one for each output column)...")
+    print(f"\nTraining 4 separate models...")
     epochs = 100
 
     for i, col in enumerate(Y_df.columns):
         num_classes = len(encoders[col].classes_)
         print(f"\n=========================================")
         print(f"Model for '{col}' ({num_classes} classes)")
-        print(f"Architecture: Inputs={input_size}, Hidden={hidden_size}, Outputs={num_classes}")
+        print(f"Inputs={input_size}, Hidden={hidden_size}, Outputs={num_classes}")
         print(f"=========================================")
         
-        # Instantiate model for this specific target
-        model = SimpleNN(input_size, hidden_size, num_classes)
+        model = NeuralNetwork(input_size, hidden_size, num_classes)
         criterion = nn.NLLLoss()
         optimizer = optim.Adam(model.parameters(), lr=0.01)
 
@@ -77,14 +74,10 @@ def main():
         for epoch in range(epochs):
             model.train()
             
-            # Forward pass
             outputs = model(X_train_tensor)
-            
-            # The target for this model is just the i-th column
             target = y_train_tensor[:, i]
             loss = criterion(outputs, target)
             
-            # Backward and optimize
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()

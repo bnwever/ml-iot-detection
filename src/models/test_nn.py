@@ -8,7 +8,7 @@ import os
 import joblib
 
 # Import the network architecture
-from network import SimpleNN
+from network import NeuralNetwork
 
 def main():
     x_path = os.path.join('data', 'processed', 'X_matrix.parquet')
@@ -23,7 +23,7 @@ def main():
     # Load the scaler and transform X
     scaler_path = os.path.join(models_dir, 'scaler.pkl')
     if not os.path.exists(scaler_path):
-        print(f"Error: {scaler_path} not found. Have you run train_nn.py yet?")
+        print(f"Error: {scaler_path} not found. Run train_nn.py first.")
         return
         
     scaler = joblib.load(scaler_path)
@@ -42,8 +42,8 @@ def main():
         Y[:, i] = encoders[col].transform(Y_df[col].astype(str))
     print("Loaded LabelEncoders and transformed targets.")
 
-    # Split the dataset 70/30 (deterministic random_state to match training)
-    print("Splitting data to extract test set (using random_state=42)...")
+    # Split the dataset 70/30
+    print("Splitting data to extract test set...")
     _, X_test, _, y_test = train_test_split(X, Y, test_size=0.3, random_state=42)
 
     # Convert to PyTorch tensors
@@ -53,7 +53,7 @@ def main():
     input_size = X_test.shape[1] 
     hidden_size = 24
     
-    print(f"\nEvaluating 4 separate models (one for each output column)...")
+    print(f"\nEvaluating 4 separate models...")
     
     evaluation_metrics = []
     criterion = nn.NLLLoss()
@@ -65,7 +65,7 @@ def main():
         print(f"=========================================")
         
         # Load model
-        model = SimpleNN(input_size, hidden_size, num_classes)
+        model = NeuralNetwork(input_size, hidden_size, num_classes)
         model_path = os.path.join(models_dir, f"{col}_model.pth")
         
         if not os.path.exists(model_path):
@@ -96,9 +96,40 @@ def main():
             target_names = [str(c) for c in encoders[col].classes_]
             
             print(f"\nClassification Report for {col}:")
-            print(classification_report(target_np, predicted_np, target_names=target_names, zero_division=0))
             
-            # Extract weighted average metrics for the final summary table
+            from sklearn.metrics import confusion_matrix
+            report_dict = classification_report(target_np, predicted_np, target_names=target_names, zero_division=0, output_dict=True)
+            cm = confusion_matrix(target_np, predicted_np)
+            total = np.sum(cm)
+            
+            overall_acc = report_dict.pop('accuracy')
+            df_report = pd.DataFrame(report_dict).transpose()
+            
+            acc_column = []
+            for idx in df_report.index:
+                if idx in target_names:
+                    i = target_names.index(idx)
+                    TP = cm[i, i]
+                    FP = np.sum(cm[:, i]) - TP
+                    FN = np.sum(cm[i, :]) - TP
+                    TN = total - TP - FN - FP
+                    class_acc = (TP + TN) / total if total > 0 else 0
+                    acc_column.append(class_acc)
+                elif idx == 'macro avg':
+                    acc_column.append(np.mean([acc_column[j] for j in range(len(target_names))]))
+                elif idx == 'weighted avg':
+                    # Use the overall model accuracy
+                    acc_column.append(overall_acc)
+                else:
+                    acc_column.append(overall_acc)
+            
+            df_report.insert(0, 'accuracy', acc_column)
+            
+            # Format support as integer
+            df_report['support'] = df_report['support'].astype(int)
+            print(df_report.to_string(float_format=lambda x: f"{x:.4f}"))
+            
+            # Extract weighted average metrics for the final summary
             precision, recall, fscore, _ = precision_recall_fscore_support(
                 target_np, predicted_np, average='weighted', zero_division=0
             )
@@ -118,8 +149,12 @@ def main():
         print(summary_df.to_string())
         
         avg_acc = summary_df["Accuracy"].mean()
+        avg_prec = summary_df["Precision"].mean()
+        avg_rec = summary_df["Recall"].mean()
         avg_f1 = summary_df["F1-Score"].mean()
         print(f"\nAverage Accuracy: {avg_acc:.4f}")
+        print(f"Average Precision: {avg_prec:.4f}")
+        print(f"Average Recall: {avg_rec:.4f}")
         print(f"Average F1-Score: {avg_f1:.4f}")
 
 if __name__ == "__main__":

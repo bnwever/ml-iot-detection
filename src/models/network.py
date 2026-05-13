@@ -1,12 +1,10 @@
 import torch.nn as nn
 
-class SimpleNN(nn.Module):
+class NeuralNetwork(nn.Module):
     def __init__(self, input_size, hidden_size, output_size):
-        super(SimpleNN, self).__init__()
-        # 1 hidden layer
+        super(NeuralNetwork, self).__init__()
         self.fc1 = nn.Linear(input_size, hidden_size)
         self.relu = nn.ReLU()
-        # Output layer
         self.fc2 = nn.Linear(hidden_size, output_size)
         self.log_softmax = nn.LogSoftmax(dim=1)
 
