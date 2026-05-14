@@ -15,27 +15,38 @@ df = pd.read_parquet("data/processed/ciciot2022.parquet")
 print(f"Dataset shape: {df.shape}")
 
 # ─────────────────────────────────────────
-# 2. SEPARATE FEATURES AND TARGET
+# 2. FEATURE SELECTION
 # ─────────────────────────────────────────
-# Drop target, metadata, and IP columns (IP = data leakage)
-drop_cols = [
-    'device',           # target
-    'global_category',  # metadata
-    'interaction_type', # metadata
-    'command',          # metadata
-    'epoch_timestamp',  # timestamp
-    'ip_dst_new',       # IP leakage
-    'most_freq_d_ip',   # IP leakage
+X_FEATURES = [
+    'L4_tcp', 'L4_udp', 'L7_http', 'L7_https', 'port_class_src',
+    'port_class_dst', 'pck_size', 'ethernet_frame_size', 'ttl',
+    'total_length', 'protocol', 'source_port', 'dest_port', 'DNS_count',
+    'NTP_count', 'ARP_count', 'cnt', 'L3_ip_dst_count', 'most_freq_prot',
+    'most_freq_sport', 'most_freq_dport', 'sum_et', 'min_et', 'max_et',
+    'med_et', 'average_et', 'skew_et', 'kurt_et', 'var', 'q3', 'q1', 'iqr',
+    'sum_e', 'min_e', 'max_e', 'med', 'average', 'skew_e', 'kurt_e',
+    'var_e', 'q3_e', 'q1_e', 'iqr_e'
 ]
 
-y = df['device']
-X = df.drop(columns=[c for c in drop_cols if c in df.columns])
+Y_FEATURES = ['global_category', 'device', 'interaction_type', 'command']
+
+# Check for missing columns
+missing = [col for col in X_FEATURES if col not in df.columns]
+if missing:
+    print(f"Warning: Missing features: {missing}")
+    X_FEATURES = [col for col in X_FEATURES if col in df.columns]
 
 print(f"\nDevices in dataset:")
-print(y.value_counts())
+print(df['device'].value_counts())
 
 # ─────────────────────────────────────────
-# 3. HANDLE NON-NUMERIC FEATURES
+# 3. SEPARATE FEATURES AND TARGETS
+# ─────────────────────────────────────────
+X = df[X_FEATURES].copy()
+y = df[Y_FEATURES].copy()
+
+# ─────────────────────────────────────────
+# 4. HANDLE NON-NUMERIC FEATURES
 # ─────────────────────────────────────────
 le = LabelEncoder()
 for col in X.columns:
@@ -45,38 +56,30 @@ for col in X.columns:
     else:
         X[col] = pd.to_numeric(X[col], errors='coerce')
 
+# Encode target columns
+y_encoded = pd.DataFrame()
+target_encoders = {}
+for target in Y_FEATURES:
+    enc = LabelEncoder()
+    y_encoded[target] = enc.fit_transform(y[target].astype(str))
+    target_encoders[target] = enc
+
 # ─────────────────────────────────────────
-# 4. HANDLE MISSING VALUES
+# 5. HANDLE MISSING VALUES
 # ─────────────────────────────────────────
-X = X.dropna(axis=1, how='all')
 X = X.fillna(0)
 
-print(f"\nFeatures after cleaning: {X.shape[1]}")
-
-# ─────────────────────────────────────────
-# 5. REMOVE RARE CLASSES
-# ─────────────────────────────────────────
-min_samples = 3
-class_counts = y.value_counts()
-valid_classes = class_counts[class_counts >= min_samples].index
-removed = class_counts[class_counts < min_samples].index.tolist()
-if removed:
-    print(f"\nRemoving rare classes: {removed}")
-
-mask = y.isin(valid_classes)
-X = X[mask]
-y = y[mask]
-
-print(f"Remaining samples: {len(y)}")
+print(f"\nFeatures: {X.shape[1]}")
+print(f"Samples: {len(X)}")
 
 # ─────────────────────────────────────────
 # 6. TRAIN/TEST SPLIT (before scaling!)
 # ─────────────────────────────────────────
 X_train, X_test, y_train, y_test = train_test_split(
-    X, y,
+    X, y_encoded,
     test_size=0.2,
     random_state=42,
-    stratify=y
+    stratify=y_encoded['device']
 )
 
 print(f"\nTraining samples: {len(X_train)}")
@@ -85,17 +88,14 @@ print(f"Testing samples:  {len(X_test)}")
 # ─────────────────────────────────────────
 # 7. SCALE FEATURES (fit on train only!)
 # ─────────────────────────────────────────
-# CRITICAL: fit scaler on training data only
-# fitting on full dataset leaks test set info into the model
 scaler = StandardScaler()
 X_train_scaled = scaler.fit_transform(X_train)
 X_test_scaled = scaler.transform(X_test)
 
-# Fix any NaN/inf
 X_train_scaled = np.nan_to_num(X_train_scaled, nan=0.0, posinf=0.0, neginf=0.0)
 X_test_scaled = np.nan_to_num(X_test_scaled, nan=0.0, posinf=0.0, neginf=0.0)
 
-# Scale full dataset for cross validation (fit on full is okay for CV since CV handles its own splits)
+# Scale full dataset for cross validation
 scaler_cv = StandardScaler()
 X_all_scaled = scaler_cv.fit_transform(X)
 X_all_scaled = np.nan_to_num(X_all_scaled, nan=0.0, posinf=0.0, neginf=0.0)
@@ -109,7 +109,7 @@ accuracies = []
 
 for k in k_values:
     knn = KNeighborsClassifier(n_neighbors=k, metric='euclidean')
-    scores = cross_val_score(knn, X_all_scaled, y, cv=3, scoring='accuracy')
+    scores = cross_val_score(knn, X_all_scaled, y_encoded['device'], cv=3, scoring='accuracy')
     acc = scores.mean()
     accuracies.append(acc)
     print(f"k={k:2d}  accuracy={acc:.4f}  (+/- {scores.std():.4f})")
@@ -138,27 +138,39 @@ model.fit(X_train_scaled, y_train)
 print(f"\nFinal model trained with k={best_k}")
 
 # ─────────────────────────────────────────
-# 10. EVALUATE ON TEST SET
+# 10. EVALUATE ALL 4 OUTPUTS
 # ─────────────────────────────────────────
 y_pred = model.predict(X_test_scaled)
+y_pred_df = pd.DataFrame(y_pred, columns=Y_FEATURES)
 
-print("\n── Classification Report ──")
-print(classification_report(y_test, y_pred))
+print("\n── Classification Reports for all 4 outputs ──")
+for i, target in enumerate(Y_FEATURES):
+    enc = target_encoders[target]
+    y_test_labels = enc.inverse_transform(y_test[target])
+    y_pred_labels = enc.inverse_transform(y_pred_df[target])
+    print(f"\n{'='*50}")
+    print(f"Target: {target.upper()}")
+    print(f"{'='*50}")
+    print(classification_report(y_test_labels, y_pred_labels))
 
 # ─────────────────────────────────────────
-# 11. CONFUSION MATRIX
+# 11. CONFUSION MATRIX FOR DEVICE
 # ─────────────────────────────────────────
-labels = sorted(y.unique())
-cm = confusion_matrix(y_test, y_pred, labels=labels)
+enc = target_encoders['device']
+y_test_device = enc.inverse_transform(y_test['device'])
+y_pred_device = enc.inverse_transform(y_pred_df['device'])
+
+labels = sorted(enc.classes_)
+cm = confusion_matrix(y_test_device, y_pred_device, labels=labels)
 
 plt.figure(figsize=(14, 12))
 sns.heatmap(cm, annot=True, fmt='d', cmap='Blues',
             xticklabels=labels, yticklabels=labels)
-plt.title(f'kNN Confusion Matrix (k={best_k})')
+plt.title(f'kNN Confusion Matrix - Device (k={best_k})')
 plt.ylabel('Actual Device')
 plt.xlabel('Predicted Device')
 plt.xticks(rotation=45, ha='right')
 plt.tight_layout()
 plt.savefig('knn_confusion_matrix.png', dpi=150)
 plt.close()
-print("Confusion matrix saved as knn_confusion_matrix.png")
+print("\nConfusion matrix saved as knn_confusion_matrix.png")
