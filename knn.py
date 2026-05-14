@@ -54,14 +54,7 @@ X = X.fillna(0)
 print(f"\nFeatures after cleaning: {X.shape[1]}")
 
 # ─────────────────────────────────────────
-# 5. SCALE FEATURES
-# ─────────────────────────────────────────
-scaler = StandardScaler()
-X_scaled = scaler.fit_transform(X)
-X_scaled = np.nan_to_num(X_scaled, nan=0.0, posinf=0.0, neginf=0.0)
-
-# ─────────────────────────────────────────
-# 6. REMOVE RARE CLASSES
+# 5. REMOVE RARE CLASSES
 # ─────────────────────────────────────────
 min_samples = 3
 class_counts = y.value_counts()
@@ -71,16 +64,16 @@ if removed:
     print(f"\nRemoving rare classes: {removed}")
 
 mask = y.isin(valid_classes)
-X_scaled = X_scaled[mask.values]
+X = X[mask]
 y = y[mask]
 
 print(f"Remaining samples: {len(y)}")
 
 # ─────────────────────────────────────────
-# 7. TRAIN/TEST SPLIT
+# 6. TRAIN/TEST SPLIT (before scaling!)
 # ─────────────────────────────────────────
 X_train, X_test, y_train, y_test = train_test_split(
-    X_scaled, y,
+    X, y,
     test_size=0.2,
     random_state=42,
     stratify=y
@@ -90,7 +83,25 @@ print(f"\nTraining samples: {len(X_train)}")
 print(f"Testing samples:  {len(X_test)}")
 
 # ─────────────────────────────────────────
-# 8. FIND BEST K
+# 7. SCALE FEATURES (fit on train only!)
+# ─────────────────────────────────────────
+# CRITICAL: fit scaler on training data only
+# fitting on full dataset leaks test set info into the model
+scaler = StandardScaler()
+X_train_scaled = scaler.fit_transform(X_train)
+X_test_scaled = scaler.transform(X_test)
+
+# Fix any NaN/inf
+X_train_scaled = np.nan_to_num(X_train_scaled, nan=0.0, posinf=0.0, neginf=0.0)
+X_test_scaled = np.nan_to_num(X_test_scaled, nan=0.0, posinf=0.0, neginf=0.0)
+
+# Scale full dataset for cross validation (fit on full is okay for CV since CV handles its own splits)
+scaler_cv = StandardScaler()
+X_all_scaled = scaler_cv.fit_transform(X)
+X_all_scaled = np.nan_to_num(X_all_scaled, nan=0.0, posinf=0.0, neginf=0.0)
+
+# ─────────────────────────────────────────
+# 8. FIND BEST K USING CROSS VALIDATION
 # ─────────────────────────────────────────
 print("\n── Testing different values of k ──")
 k_values = range(1, 16)
@@ -98,7 +109,7 @@ accuracies = []
 
 for k in k_values:
     knn = KNeighborsClassifier(n_neighbors=k, metric='euclidean')
-    scores = cross_val_score(knn, X_scaled, y, cv=3, scoring='accuracy')
+    scores = cross_val_score(knn, X_all_scaled, y, cv=3, scoring='accuracy')
     acc = scores.mean()
     accuracies.append(acc)
     print(f"k={k:2d}  accuracy={acc:.4f}  (+/- {scores.std():.4f})")
@@ -116,20 +127,20 @@ plt.ylabel('Accuracy')
 plt.legend()
 plt.tight_layout()
 plt.savefig('knn_k_tuning.png', dpi=150)
-plt.show()
+plt.close()
 print("k tuning plot saved as knn_k_tuning.png")
 
 # ─────────────────────────────────────────
 # 9. TRAIN FINAL MODEL WITH BEST K
 # ─────────────────────────────────────────
 model = KNeighborsClassifier(n_neighbors=best_k, metric='euclidean')
-model.fit(X_train, y_train)
+model.fit(X_train_scaled, y_train)
 print(f"\nFinal model trained with k={best_k}")
 
 # ─────────────────────────────────────────
-# 10. EVALUATE
+# 10. EVALUATE ON TEST SET
 # ─────────────────────────────────────────
-y_pred = model.predict(X_test)
+y_pred = model.predict(X_test_scaled)
 
 print("\n── Classification Report ──")
 print(classification_report(y_test, y_pred))
@@ -149,5 +160,5 @@ plt.xlabel('Predicted Device')
 plt.xticks(rotation=45, ha='right')
 plt.tight_layout()
 plt.savefig('knn_confusion_matrix.png', dpi=150)
-plt.show()
+plt.close()
 print("Confusion matrix saved as knn_confusion_matrix.png")
